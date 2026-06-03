@@ -1,0 +1,16 @@
+[project]
+name = "seizu"
+version = "0.1.0"
+description = "星図生成プログラム / Star Chart Generator"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "astropy>=6.0",
+    "matplotlib>=3.8",
+    "numpy>=1.26",
+    "pyinstaller>=6.20.0",
+    "tzdata>=2024.1",   # required for zoneinfo on Windows
+]
+
+[tool.uv]
+package = false
