@@ -48,7 +48,7 @@ def _run_generate(args, status_cb):
 
 def main():
     st.set_page_config(
-        page_title="星図生成プログラム",
+        page_title="星図つくれるサイト",
         page_icon="🌟",
         layout="wide",
         initial_sidebar_state="expanded",
@@ -111,10 +111,10 @@ def main():
         fmt = st.radio("形式", ["PNG", "JPG"], horizontal=True)
 
         st.divider()
-        generate = st.button("🌟 星図を生成", type="primary", use_container_width=True)
+        generate = st.button("星図を作成", type="primary", use_container_width=True)
 
     # ── Main area ─────────────────────────────────────────────────────────────────
-    st.title("🌟 星図生成プログラム")
+    st.title("星図をつくります")
 
     if generate:
         ext = ".jpg" if fmt == "JPG" else ".png"
@@ -171,7 +171,7 @@ def main():
             mime,
         )
     else:
-        st.info("左のサイドバーで設定を調整し、「🌟 星図を生成」ボタンを押してください。")
+        st.info("左のサイドバーで設定を調整し、「星図を作成」を押してください。")
         st.caption("初回実行時は星カタログのダウンロード（約10 MB）が発生します。")
 
 
