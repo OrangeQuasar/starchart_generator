@@ -1,0 +1,5 @@
+streamlit>=1.30
+astropy>=6.0
+matplotlib>=3.8
+numpy>=1.26
+tzdata>=2024.1
