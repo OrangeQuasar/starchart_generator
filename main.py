@@ -1,37 +1,15 @@
-#!/usr/bin/env python3
-"""
-星図生成プログラム / Star Chart Generator
+"""星図生成コアライブラリ / Star Chart Generator core library"""
 
-Usage:
-    uv run main.py [options]
-
-Examples:
-    # Tokyo, current time (default)
-    uv run main.py
-
-    # Specify location and time
-    uv run main.py --lat 35.6762 --lon 139.6503 --datetime "2025-07-15T21:00:00" --timezone Asia/Tokyo
-
-    # English labels, New York
-    uv run main.py --lat 40.7128 --lon -74.0060 --timezone America/New_York --lang en
-
-    # Force re-download of catalog data
-    uv run main.py --force-refresh
-"""
-
-import argparse
 import csv
 import gzip
 import io
+import json
 import math
 import pickle
-import sys
 import urllib.request
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
-
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 
 import matplotlib
 matplotlib.use("Agg")
@@ -56,7 +34,6 @@ DATA_DIR = Path.home() / ".seizu"
 HYG_CACHE = DATA_DIR / "hyg.pkl"
 CONST_CACHE = DATA_DIR / "constellations.pkl"
 
-# Each entry: (url, is_gzipped)
 HYG_URLS: list[tuple[str, bool]] = [
     ("https://raw.githubusercontent.com/astronexus/HYG-Database/main/hyg/CURRENT/hygdata_v41.csv", False),
     ("https://raw.githubusercontent.com/astronexus/HYG-Database/main/hyg/CURRENT/hygdata_v40.csv.gz", True),
@@ -101,7 +78,6 @@ DIRECTIONS_8 = [
     ("NW", 315, "北西"),
 ]
 
-# Direction name → center azimuth (for --direction option)
 DIRECTION_TO_AZ: dict[str, float] = {
     "北": 0, "北東": 45, "東": 90, "南東": 135,
     "南": 180, "南西": 225, "西": 270, "北西": 315,
@@ -178,7 +154,6 @@ CONSTELLATION_NAMES: dict[str, dict[str, str]] = {
     },
 }
 
-# Spectral class → color (blackbody approximation)
 SPECTRAL_COLORS: dict[str, str] = {
     "O": "#9bb0ff", "B": "#aabfff", "A": "#cad7ff",
     "F": "#f8f7ff", "G": "#fff4ea", "K": "#ffd2a1", "M": "#ffcc6f",
@@ -261,37 +236,36 @@ CITIES: dict[str, tuple[float, float, str]] = {
 }
 
 # ─── Seasonal asterisms ──────────────────────────────────────────────────────────
-# HIP numbers; label_hip = preferred label anchor star (None → centroid)
 
 ASTERISMS: list[dict] = [
     {
         "ja": "春の大曲線", "en": "Spring Arc",
-        "hip": [62956, 65378, 67301, 69673, 65474],  # Alioth·Mizar·Alkaid·Arcturus·Spica
+        "hip": [62956, 65378, 67301, 69673, 65474],
         "label_hip": 69673, "color": "#66cc88", "closed": False,
     },
     {
         "ja": "春の大三角", "en": "Spring Triangle",
-        "hip": [69673, 65474, 57632],  # Arcturus·Spica·Denebola
+        "hip": [69673, 65474, 57632],
         "label_hip": None, "color": "#55ccbb", "closed": True,
     },
     {
         "ja": "夏の大三角", "en": "Summer Triangle",
-        "hip": [91262, 102098, 97649],  # Vega·Deneb·Altair
+        "hip": [91262, 102098, 97649],
         "label_hip": 102098, "color": "#8899ff", "closed": True,
     },
     {
         "ja": "秋の大四辺形", "en": "Autumn Square",
-        "hip": [113963, 113881, 677, 1067],  # Markab·Scheat·Alpheratz·Algenib
+        "hip": [113963, 113881, 677, 1067],
         "label_hip": None, "color": "#ffaa44", "closed": True,
     },
     {
         "ja": "冬の大三角", "en": "Winter Triangle",
-        "hip": [32349, 27989, 37279],  # Sirius·Betelgeuse·Procyon
+        "hip": [32349, 27989, 37279],
         "label_hip": 27989, "color": "#ff8866", "closed": True,
     },
     {
         "ja": "冬の大六角形", "en": "Winter Hexagon",
-        "hip": [32349, 24436, 21421, 24608, 37826, 37279],  # Sirius·Rigel·Aldebaran·Capella·Pollux·Procyon
+        "hip": [32349, 24436, 21421, 24608, 37826, 37279],
         "label_hip": 24608, "color": "#ffdd88", "closed": True,
     },
 ]
@@ -344,7 +318,7 @@ def load_hyg_catalog(force: bool = False) -> list[dict]:
                 continue
             stars.append({
                 "hip":    int(row["hip"]) if row.get("hip", "").strip() else 0,
-                "ra":     float(row["ra"]) * 15.0,  # hours → degrees
+                "ra":     float(row["ra"]) * 15.0,
                 "dec":    float(row["dec"]),
                 "mag":    mag,
                 "proper": row.get("proper", "").strip(),
@@ -371,19 +345,15 @@ def load_constellation_lines(force: bool = False) -> dict[str, list[tuple[int, i
         print(f"  Warning: Could not download constellation data ({e}). Lines will be skipped.")
         return {}
 
-    import json
     data = json.loads(raw.decode("utf-8"))
 
     constellations: dict[str, list[tuple[int, int]]] = {}
     for entry in data.get("constellations", []):
-        # id format: "CON modern Aql"
         con_id = entry.get("id", "")
         parts = con_id.split()
         abbrev = parts[-1] if parts else con_id
-
         segs: list[tuple[int, int]] = []
         for polyline in entry.get("lines", []):
-            # Each polyline is a list of HIP numbers; consecutive pairs form segments
             for i in range(len(polyline) - 1):
                 segs.append((polyline[i], polyline[i + 1]))
         constellations.setdefault(abbrev, []).extend(segs)
@@ -429,12 +399,10 @@ def mag_to_size(mag: float) -> float:
 # ─── Drawing routines ───────────────────────────────────────────────────────────
 
 def _horizon_clip_patch(ax) -> mpatches.Circle:
-    """Full-circle clip patch in data coords."""
     return mpatches.Circle((0, 0), 90.0, transform=ax.transData)
 
 
 def _semi_clip_patch(ax) -> PathPatch:
-    """Upper-semicircle clip patch: arc on top, flat line at bottom (y=0)."""
     θ = np.linspace(0, math.pi, 181)
     arc_x = 90 * np.cos(θ)
     arc_y = 90 * np.sin(θ)
@@ -462,7 +430,6 @@ def draw_sky_background(ax, semi: bool = False) -> None:
 
 
 def draw_horizon_mask(ax, semi: bool = False) -> None:
-    """Mask everything outside the visible sky region."""
     θ = np.linspace(0, 2 * np.pi, 360, endpoint=False)
     ox, oy = 200 * np.cos(θ), 200 * np.sin(θ)
     ix, iy = 90 * np.cos(-θ),  90 * np.sin(-θ)
@@ -473,7 +440,6 @@ def draw_horizon_mask(ax, semi: bool = False) -> None:
     ax.add_patch(PathPatch(MplPath(verts, codes),
                            facecolor="#070715", edgecolor="none", zorder=7))
     if semi:
-        # Cover the underground region (below the horizon line)
         ax.add_patch(mpatches.Rectangle((-110, -110), 220, 110,
                                          facecolor="#070715", edgecolor="none", zorder=7))
 
@@ -483,7 +449,6 @@ def draw_grid(ax, lang: str, center_az: float | None = None) -> None:
     clip = _semi_clip_patch(ax) if is_semi else _horizon_clip_patch(ax)
 
     if is_semi:
-        # Altitude reference lines (horizontal in orthographic projection)
         for alt in (30, 60):
             y_alt = math.sin(math.radians(alt)) * 90
             x_alt = math.cos(math.radians(alt)) * 90
@@ -492,7 +457,6 @@ def draw_grid(ax, lang: str, center_az: float | None = None) -> None:
             ax.text(x_alt + 1.5, y_alt, f"{alt}°", color="#3a5070", fontsize=7,
                     ha="left", va="center", zorder=8)
 
-        # Azimuth spokes from zenith (0, 90) to horizon
         for label_en, az, label_jp in DIRECTIONS_8:
             if not in_view_half(az, center_az):
                 continue
@@ -504,18 +468,14 @@ def draw_grid(ax, lang: str, center_az: float | None = None) -> None:
             ax.text(x_hor, -5, lbl, color="#6699cc", fontsize=11,
                     ha="center", va="top", fontweight="bold", zorder=9)
 
-        # Horizon line and sky-boundary arc
         ax.plot([-90, 90], [0, 0], color="#2a4a70", linewidth=2.0, zorder=8)
         θ = np.linspace(0, math.pi, 181)
         ax.plot(90 * np.cos(θ), 90 * np.sin(θ), color="#2a4a70", linewidth=2.0, zorder=8)
-
-        # Zenith marker at top of arc
         ax.plot(0, 90, "+", color="#2a4a70", markersize=8, markeredgewidth=1, zorder=9)
         zen_lbl = "天頂" if lang == "ja" else "Zenith"
         ax.text(0, 91.5, zen_lbl, color="#3a5070", fontsize=7,
                 ha="center", va="bottom", zorder=9)
     else:
-        # Full-sky: altitude circles
         for alt in (30, 60):
             r = 90 - alt
             ax.add_patch(mpatches.Circle((0, 0), r, fill=False, edgecolor="#1e3050",
@@ -523,7 +483,6 @@ def draw_grid(ax, lang: str, center_az: float | None = None) -> None:
             ax.text(1.5, r + 1.5, f"{alt}°", color="#3a5070", fontsize=7,
                     ha="left", va="bottom", zorder=8)
 
-        # Azimuth spokes and direction labels
         for label_en, az, label_jp in DIRECTIONS_8:
             x_hor, y_hor = altaz_to_xy(0, az)
             line, = ax.plot([0, x_hor], [0, y_hor], color="#1a2a40",
@@ -535,7 +494,6 @@ def draw_grid(ax, lang: str, center_az: float | None = None) -> None:
             ax.text(xl, yl, lbl, color="#6699cc", fontsize=11,
                     ha="center", va="center", fontweight="bold", zorder=9)
 
-        # Horizon circle and zenith marker
         ax.add_patch(mpatches.Circle((0, 0), 90, fill=False, edgecolor="#2a4a70",
                                      linewidth=2.0, zorder=8))
         ax.plot(0, 0, "+", color="#2a4a70", markersize=8, markeredgewidth=1, zorder=9)
@@ -675,18 +633,14 @@ def draw_milky_way(ax, altaz_frame, center_az: float | None = None) -> None:
     clip = _semi_clip_patch(ax) if is_semi else _horizon_clip_patch(ax)
     rng = np.random.default_rng(42)
 
-    # ── Galactic-plane samples ──────────────────────────────────────────────────
     n = 14000
     l = rng.uniform(0, 360, n)
-    dist_c = np.minimum(l, 360 - l)                          # deg from galactic center
+    dist_c = np.minimum(l, 360 - l)
     sigma_b = 5.0 + 7.5 * np.exp(-(dist_c ** 2) / (2 * 45 ** 2))
     b = rng.normal(0, sigma_b)
-
-    # Extra bulge concentration near l ≈ 0
     l = np.concatenate([l, rng.normal(0, 12, 3000) % 360])
     b = np.concatenate([b, rng.normal(0, 4.0, 3000)])
 
-    # ── AltAz transform ─────────────────────────────────────────────────────────
     aa = SkyCoord(l=l * u.deg, b=b * u.deg, frame='galactic').transform_to(altaz_frame)
     alts, azs = aa.alt.deg, aa.az.deg
 
@@ -701,13 +655,11 @@ def draw_milky_way(ax, altaz_frame, center_az: float | None = None) -> None:
                    for a, az in zip(alts, azs)])
     xs, ys = xy[:, 0], xy[:, 1]
 
-    # ── 2-D density grid ────────────────────────────────────────────────────────
     res = 160
     xr = (-92.0, 92.0)
     yr = (0.0, 92.0) if is_semi else (-92.0, 92.0)
     H, xe, ye = np.histogram2d(xs, ys, bins=res, range=[xr, yr])
 
-    # Gaussian smoothing via separable 1-D convolution (no scipy needed)
     sigma = 4
     k = np.exp(-0.5 * (np.arange(-3 * sigma, 3 * sigma + 1) / sigma) ** 2)
     k /= k.sum()
@@ -718,7 +670,6 @@ def draw_milky_way(ax, altaz_frame, center_az: float | None = None) -> None:
     vmax = float(np.percentile(nonzero, 95)) if nonzero.size else 1.0
     H = np.clip(H / vmax, 0.0, 1.0)
 
-    # ── Render ──────────────────────────────────────────────────────────────────
     cmap = mcolors.LinearSegmentedColormap.from_list(
         'mw',
         [(0.00, (0.04, 0.06, 0.10, 0.00)),
@@ -750,7 +701,7 @@ def draw_asterisms(
         alt, az = hip_altaz[h]
         if is_semi and not in_view_half(az, center_az):
             return None
-        return altaz_to_xy(alt, az, center_az)  # clip path handles horizon boundary
+        return altaz_to_xy(alt, az, center_az)
 
     for ast in ASTERISMS:
         color = ast["color"]
@@ -798,22 +749,26 @@ def draw_asterisms(
                                   edgecolor="none", alpha=0.65))
 
 
-# ─── Main ───────────────────────────────────────────────────────────────────────
+# ─── Chart generation ───────────────────────────────────────────────────────────
 
-def generate_chart(args: argparse.Namespace) -> None:
+def generate_chart(args) -> None:
+    """Generate a star chart image.
+
+    args must expose the same attributes as the CLI namespace:
+    city, lat, lon, elevation, location_name, datetime, timezone, lang,
+    direction, min_mag, no_milky_way, no_constellation_lines,
+    no_constellation_names, no_star_names, no_planet_names, no_asterisms,
+    title, dpi, force_refresh, output.
+    """
     setup_font(args.lang)
 
-    # ── City preset ──
     if args.city:
         if args.city not in CITIES:
-            valid = ", ".join(CITIES.keys())
-            print(f"Error: unknown city '{args.city}'. Valid: {valid}")
-            sys.exit(1)
+            raise ValueError(f"Unknown city '{args.city}'. Valid: {', '.join(CITIES)}")
         args.lat, args.lon, args.timezone = CITIES[args.city]
         if not args.location_name:
             args.location_name = args.city
 
-    # ── Time setup ──
     tz = ZoneInfo(args.timezone)
     if args.datetime:
         local_dt = datetime.fromisoformat(args.datetime).replace(tzinfo=tz)
@@ -821,7 +776,6 @@ def generate_chart(args: argparse.Namespace) -> None:
         local_dt = datetime.now(tz=tz)
     obs_time = Time(local_dt.astimezone(ZoneInfo("UTC")))
 
-    # ── Location ──
     location = EarthLocation(
         lat=args.lat * u.deg,
         lon=args.lon * u.deg,
@@ -829,13 +783,11 @@ def generate_chart(args: argparse.Namespace) -> None:
     )
     altaz_frame = AltAz(obstime=obs_time, location=location)
 
-    # ── Load catalogs ──
     print("Loading star catalog …")
     stars = load_hyg_catalog(args.force_refresh)
     print("Loading constellation data …")
     const_lines = load_constellation_lines(args.force_refresh)
 
-    # ── Star positions (vectorized) ──
     print("Computing star positions …")
     star_coords = SkyCoord(
         ra=np.array([s["ra"] for s in stars]) * u.deg,
@@ -846,13 +798,11 @@ def generate_chart(args: argparse.Namespace) -> None:
     star_alts: np.ndarray = result.alt.deg
     star_azs: np.ndarray = result.az.deg
 
-    # Build HIP → (alt, az) for constellation lines
     hip_altaz: dict[int, tuple[float, float]] = {
         s["hip"]: (float(star_alts[i]), float(star_azs[i]))
         for i, s in enumerate(stars) if s["hip"]
     }
 
-    # ── Planet positions ──
     print("Computing planet positions …")
     planet_data: dict[str, dict] = {}
     with solar_system_ephemeris.set("builtin"):
@@ -864,18 +814,17 @@ def generate_chart(args: argparse.Namespace) -> None:
             except Exception as e:
                 print(f"  Skipping {body}: {e}")
 
-    # ── Direction / semicircle mode ──
     center_az: float | None = None
     if args.direction:
         center_az = DIRECTION_TO_AZ.get(args.direction)
         if center_az is None:
-            valid = ", ".join(DIRECTION_TO_AZ.keys())
-            print(f"Error: unknown direction '{args.direction}'. Valid: {valid}")
-            sys.exit(1)
+            raise ValueError(
+                f"Unknown direction '{args.direction}'. "
+                f"Valid: {', '.join(DIRECTION_TO_AZ)}"
+            )
 
     is_semi = center_az is not None
 
-    # ── Figure ──
     print("Rendering chart …")
     if is_semi:
         fig, ax = plt.subplots(figsize=(14, 8), facecolor="#070715")
@@ -893,11 +842,9 @@ def generate_chart(args: argparse.Namespace) -> None:
 
     draw_sky_background(ax, semi=is_semi)
 
-    # Milky Way (rendered below constellation lines and stars)
     if not args.no_milky_way:
         draw_milky_way(ax, altaz_frame, center_az=center_az)
 
-    # Constellation lines (below stars)
     if not args.no_constellation_lines or not args.no_constellation_names:
         draw_constellation_lines(
             ax, const_lines, hip_altaz,
@@ -906,28 +853,23 @@ def generate_chart(args: argparse.Namespace) -> None:
             center_az=center_az,
         )
 
-    # Seasonal asterisms
     if not args.no_asterisms:
         draw_asterisms(ax, hip_altaz,
                        show_names=True,
                        lang=args.lang,
                        center_az=center_az)
 
-    # Stars
     draw_stars(ax, stars, star_alts, star_azs,
                args.min_mag, show_names=not args.no_star_names,
                center_az=center_az, lang=args.lang)
 
-    # Planets
     draw_planets(ax, planet_data,
                  show_names=not args.no_planet_names, lang=args.lang,
                  center_az=center_az)
 
-    # Grid / mask / directions (drawn last so labels appear on top)
     draw_horizon_mask(ax, semi=is_semi)
     draw_grid(ax, args.lang, center_az=center_az)
 
-    # ── Title / info text ──
     loc_name = args.location_name or f"{args.lat:+.4f}°, {args.lon:+.4f}°"
     time_str = local_dt.strftime("%Y-%m-%d  %H:%M  %Z")
     if args.title:
@@ -935,8 +877,7 @@ def generate_chart(args: argparse.Namespace) -> None:
     else:
         base = "星図" if args.lang == "ja" else "Star Chart"
         if is_semi:
-            dir_label = args.direction
-            main_title = f"{base}  —  {loc_name}  [{dir_label}方向]"
+            main_title = f"{base}  —  {loc_name}  [{args.direction}方向]"
         else:
             main_title = f"{base}  —  {loc_name}"
 
@@ -951,7 +892,6 @@ def generate_chart(args: argparse.Namespace) -> None:
         ax.text(0, 102, time_str, color="#556688", fontsize=9,
                 ha="center", va="bottom", zorder=10)
 
-    # Legend (visible planets), placed below the horizon arc
     visible_planets = [b for b, d in planet_data.items() if d["alt"] >= 0]
     if visible_planets:
         names_map = PLANET_NAMES.get(args.lang, PLANET_NAMES["en"])
@@ -961,78 +901,7 @@ def generate_chart(args: argparse.Namespace) -> None:
         ax.text(0, legend_y, legend_text, color="#556688", fontsize=8,
                 ha="center", va="top", zorder=10)
 
-    # ── Save ──
     fig.savefig(args.output, dpi=args.dpi, bbox_inches="tight",
                 facecolor=fig.get_facecolor())
     plt.close(fig)
     print(f"Saved: {args.output}")
-
-
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        description="星図生成プログラム / Star Chart Generator",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-
-    loc = p.add_argument_group("観測地 / Location")
-    loc.add_argument("--city", default="", metavar="CITY",
-                     help="都市プリセット City preset (東京/Tokyo/大阪/Osaka/…)")
-    loc.add_argument("--lat", type=float, default=35.6762,
-                     metavar="DEG", help="緯度 Latitude, N positive [35.6762=Tokyo]")
-    loc.add_argument("--lon", type=float, default=139.6503,
-                     metavar="DEG", help="経度 Longitude, E positive [139.6503=Tokyo]")
-    loc.add_argument("--elevation", type=float, default=0,
-                     metavar="M", help="標高 Elevation in metres [0]")
-    loc.add_argument("--location-name", default="", metavar="NAME",
-                     help="地名 Location name shown in title (--city sets this automatically)")
-
-    t = p.add_argument_group("日時 / Date & Time")
-    t.add_argument("--datetime", default="", metavar="YYYY-MM-DDTHH:MM:SS",
-                   help="観測日時(現地時刻) Local datetime [now]")
-    t.add_argument("--timezone", default="Asia/Tokyo", metavar="TZ",
-                   help="タイムゾーン Timezone [Asia/Tokyo]")
-
-    d = p.add_argument_group("表示 / Display")
-    d.add_argument("--no-constellation-lines", action="store_true",
-                   help="星座線を非表示")
-    d.add_argument("--no-constellation-names", action="store_true",
-                   help="星座名を非表示")
-    d.add_argument("--no-star-names", action="store_true",
-                   help="恒星名を非表示")
-    d.add_argument("--no-planet-names", action="store_true",
-                   help="惑星名を非表示")
-    d.add_argument("--lang", default="ja", choices=["ja", "en"],
-                   help="ラベル言語 [ja]")
-    d.add_argument("--min-mag", type=float, default=5.5, metavar="MAG",
-                   help="表示限界等級 Faintest magnitude shown [5.5]")
-    d.add_argument("--no-milky-way", action="store_true",
-                   help="天の川を非表示 Hide Milky Way")
-    d.add_argument("--no-asterisms", action="store_true",
-                   help="季節の大図形を非表示 Hide seasonal asterisms")
-    d.add_argument("--direction", default="", metavar="DIR",
-                   help=("表示方向 Direction for semicircle view: "
-                         "北/N 北東/NE 東/E 南東/SE 南/S 南西/SW 西/W 北西/NW"))
-
-    o = p.add_argument_group("出力 / Output")
-    o.add_argument("--output", default="starchart.png", metavar="FILE",
-                   help="出力ファイル名 Output filename [starchart.png]")
-    o.add_argument("--title", default="", help="タイトル Override chart title")
-    o.add_argument("--dpi", type=int, default=150, help="解像度 DPI [150]")
-    o.add_argument("--force-refresh", action="store_true",
-                   help="データを再ダウンロード Force re-download catalogs")
-
-    return p
-
-
-def main() -> None:
-    if "--gui" in sys.argv:
-        from gui import main as _gui_main
-        _gui_main()
-        return
-    args = build_parser().parse_args()
-    generate_chart(args)
-
-
-if __name__ == "__main__":
-    main()
